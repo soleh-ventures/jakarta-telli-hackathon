@@ -7,6 +7,7 @@ import {
   type HandFreeConfig,
   type Integration,
   type MonitorPrefs,
+  REPO_OPTIONS,
   type Sensitivity,
 } from './types';
 import { Card, SystemIcon, T, cx } from './ui';
@@ -41,15 +42,16 @@ const STEPS = ['Connect GitHub', 'Integrations', 'Monitoring', 'Contacts'];
 
 export function OnboardingWizard({ onComplete }: { onComplete: (c: HandFreeConfig) => void }) {
   const [step, setStep] = useState(0);
-  const [githubRepo, setGithubRepo] = useState('');
+  // Prefilled with the demo workspace so testing is one click. (see DEMO_CONFIG)
+  const [githubRepo, setGithubRepo] = useState(DEMO_CONFIG.githubRepo);
   const [githubConnected, setGithubConnected] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [monitor, setMonitor] = useState<MonitorPrefs>(DEMO_CONFIG.monitor);
   const [sensitivity, setSensitivity] = useState<Sensitivity>('balanced');
-  const [primaryName, setPrimaryName] = useState('');
-  const [primaryPhone, setPrimaryPhone] = useState('');
-  const [backupName, setBackupName] = useState('');
-  const [backupPhone, setBackupPhone] = useState('');
+  const [primaryName, setPrimaryName] = useState(DEMO_CONFIG.primaryName);
+  const [primaryPhone, setPrimaryPhone] = useState(DEMO_CONFIG.primaryPhone);
+  const [backupName, setBackupName] = useState(DEMO_CONFIG.backupName);
+  const [backupPhone, setBackupPhone] = useState(DEMO_CONFIG.backupPhone);
 
   const repoValid = /^[\w.-]+\/[\w.-]+$/.test(githubRepo.trim());
   const canAdvance = step === 0 ? githubConnected && repoValid : true;
@@ -68,9 +70,7 @@ export function OnboardingWizard({ onComplete }: { onComplete: (c: HandFreeConfi
   }
 
   function toggleIntegration(id: Integration) {
-    setIntegrations((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setIntegrations((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   return (
@@ -135,17 +135,20 @@ export function OnboardingWizard({ onComplete }: { onComplete: (c: HandFreeConfi
               </button>
             </Card>
             <div>
-              <input
-                className="w-full rounded-lg border border-[#1f2024] bg-[#141518] px-3.5 py-2.5 text-[15px] outline-none placeholder:text-[#585860] focus:border-[#6e6bf2]"
-                placeholder="owner/repo"
+              <select
+                className="w-full appearance-none rounded-lg border border-[#1f2024] bg-[#141518] px-3.5 py-2.5 text-[15px] outline-none focus:border-[#6e6bf2]"
                 value={githubRepo}
-                spellCheck={false}
-                autoComplete="off"
                 onChange={(e) => {
                   setGithubRepo(e.target.value);
                   setGithubConnected(false);
                 }}
-              />
+              >
+                {REPO_OPTIONS.map((repo) => (
+                  <option key={repo} value={repo}>
+                    {repo}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         )}
@@ -250,16 +253,36 @@ export function OnboardingWizard({ onComplete }: { onComplete: (c: HandFreeConfi
               Who should HandFree call when it needs a human? It dials these through telli.
             </p>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Primary engineer" value={primaryName} onChange={setPrimaryName} placeholder="Alex" />
-              <Field label="Phone" value={primaryPhone} onChange={setPrimaryPhone} placeholder="+1 555 010 1234" tel />
-              <Field label="Backup engineer" value={backupName} onChange={setBackupName} placeholder="Priya" />
-              <Field label="Phone" value={backupPhone} onChange={setBackupPhone} placeholder="+1 555 010 9876" tel />
+              <Field
+                label="Primary engineer"
+                value={primaryName}
+                onChange={setPrimaryName}
+                placeholder="Alex"
+              />
+              <Field
+                label="Phone"
+                value={primaryPhone}
+                onChange={setPrimaryPhone}
+                placeholder="+1 555 010 1234"
+                tel
+              />
+              <Field
+                label="Backup engineer"
+                value={backupName}
+                onChange={setBackupName}
+                placeholder="Priya"
+              />
+              <Field
+                label="Phone"
+                value={backupPhone}
+                onChange={setBackupPhone}
+                placeholder="+1 555 010 9876"
+                tel
+              />
             </div>
             <Card className="flex items-center gap-3 py-4">
               <SystemIcon id="telli" className="size-5 text-[#a5a3f8]" />
-              <div className="flex-1 text-[13.5px] text-[#9b9ba3]">
-                telli outbound calling
-              </div>
+              <div className="flex-1 text-[13.5px] text-[#9b9ba3]">telli outbound calling</div>
               <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#a5a3f8]">
                 <span className="size-1.5 rounded-full bg-[#a5a3f8]" /> Ready
               </span>

@@ -5,14 +5,7 @@
  * participant attributes for the (friend-owned) workflow + MCP servers to read.
  */
 export type Integration =
-  | 'datadog'
-  | 'kubernetes'
-  | 'slack'
-  | 'pagerduty'
-  | 'telli'
-  | 'aws'
-  | 'azure'
-  | 'gcp';
+  'datadog' | 'kubernetes' | 'slack' | 'pagerduty' | 'telli' | 'aws' | 'azure' | 'gcp';
 
 export type Sensitivity = 'conservative' | 'balanced' | 'aggressive';
 
@@ -53,8 +46,11 @@ export const DEMO_CONFIG: HandFreeConfig = {
     metrics: true,
   },
   sensitivity: 'balanced',
-  primaryName: 'Alex',
-  primaryPhone: '+1 555 010 1234',
-  backupName: 'Priya',
-  backupPhone: '+1 555 010 9876',
+  primaryName: 'Kemal',
+  primaryPhone: '+49 1522 4496645',
+  backupName: 'Azhar',
+  backupPhone: '+49 176 28950549',
 };
+
+/** Repos selectable in onboarding (hardcoded for the demo). */
+export const REPO_OPTIONS = ['soleh-ventures/jakarta-telli-hackathon'];
