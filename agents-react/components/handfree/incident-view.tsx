@@ -1,12 +1,49 @@
 'use client';
 
-import { AlertTriangle, ArrowDown, Check, ChevronRight, Loader2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, ArrowDown, Check, ChevronRight, Loader2, PhoneCall, X } from 'lucide-react';
+import { useDataChannel, useSessionContext } from '@livekit/components-react';
 import { useHandFreeEvents } from '@/hooks/use-handfree-events';
 import { RECOMMENDATIONS, type Recommendation } from './mock-data';
 import { ThinkingPanel } from './thinking-panel';
 import type { HandFreeConfig } from './types';
 import { Card, SectionLabel, SystemIcon, T } from './ui';
 import { VoiceDock } from './voice-dock';
+
+const CONTROL_TOPIC = 'handfree-control';
+
+/**
+ * Fires the demo flow: connect the session (so the agent joins), then signal the
+ * agent to call the on-call lead and open the incident on that phone call.
+ */
+function TriggerIncidentButton() {
+  const session = useSessionContext();
+  const { send } = useDataChannel();
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed || !session.isConnected) return;
+    void send(new TextEncoder().encode(JSON.stringify({ action: 'trigger_incident' })), {
+      topic: CONTROL_TOPIC,
+      reliable: true,
+    });
+    setArmed(false);
+  }, [armed, session.isConnected, send]);
+
+  return (
+    <button
+      onClick={() => {
+        if (!session.isConnected) void session.start();
+        setArmed(true);
+      }}
+      disabled={armed}
+      className="inline-flex items-center gap-2 rounded-lg bg-[#b3261e] px-4 py-2 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#9e211a] disabled:opacity-60"
+    >
+      <PhoneCall className="size-4" />
+      {armed ? 'Calling on-call…' : 'Trigger incident'}
+    </button>
+  );
+}
 
 export function IncidentView({ config }: { config: HandFreeConfig }) {
   // Live investigation: each step is a real tool the agent executed (see agent.py
@@ -39,9 +76,9 @@ export function IncidentView({ config }: { config: HandFreeConfig }) {
                 </div>
                 <h1 className="mt-1 text-[22px] font-semibold tracking-tight">Checkout API</h1>
               </div>
-              <div className="text-right text-[13px] text-[#9b9ba3]">
-                <div className="font-medium text-[#ededef]">Live incident</div>
-                <div className="text-[#6a6a73]">{config.githubRepo.split('/')[1]}</div>
+              <div className="flex flex-col items-end gap-2">
+                <TriggerIncidentButton />
+                <div className="text-[12px] text-[#6a6a73]">{config.githubRepo.split('/')[1]}</div>
               </div>
             </div>
           </div>

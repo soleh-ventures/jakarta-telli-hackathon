@@ -168,6 +168,46 @@ def attach_event_bus(session, room) -> None:
         )
 
 
+# The dashboard's "Trigger incident" button sends this on the control topic.
+CONTROL_TOPIC = "handfree-control"
+_INCIDENT_OPENING = (
+    "An incident just fired. The Checkout API is returning 500 errors after a recent "
+    "deploy. You have just called the on-call engineer. Greet them by name if you know "
+    "it, tell them Checkout is throwing 500s since the latest deploy, and ask if they "
+    "want you to investigate."
+)
+
+
+def attach_incident_trigger(session, ctx, *, place=place_outbound_call_from_env):
+    """When the dashboard fires 'trigger_incident', call the on-call lead and open the
+    incident on that call. Returns the runner (exposed for testing)."""
+    room = ctx.room
+    fired = {"v": False}
+    pending: set = set()  # keep strong refs so the scheduled task isn't GC'd
+
+    async def run() -> None:
+        if fired["v"]:
+            return  # one incident per session
+        fired["v"] = True
+        number = lead_number_from_room(room)
+        logger.info(f"incident triggered from UI; dialing lead {number!r}")
+        if number:
+            try:
+                await place(room_name=room.name, to_phone_number=number)
+            except Exception:
+                logger.exception("incident trigger: outbound call failed")
+        await session.generate_reply(instructions=_INCIDENT_OPENING)
+
+    def on_data(packet) -> None:
+        if getattr(packet, "topic", None) == CONTROL_TOPIC:
+            task = asyncio.create_task(run())
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+
+    room.on("data_received", on_data)
+    return run
+
+
 async def dial_lead(
     room_name: str,
     number: str | None,
@@ -372,6 +412,10 @@ async def my_agent(ctx: JobContext):
 
     # Stream tool calls + agent state to the dashboard (use-handfree-events.ts).
     attach_event_bus(session, ctx.room)
+
+    # "Trigger incident" button on the dashboard -> call the lead and open the incident.
+    if incident is None:
+        attach_incident_trigger(session, ctx)
 
     # On an incident call, the agent speaks first to brief the lead once they pick up.
     if incident is not None:
