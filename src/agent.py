@@ -1,4 +1,5 @@
 import logging
+import os
 import textwrap
 
 from dotenv import load_dotenv
@@ -9,14 +10,56 @@ from livekit.agents import (
     JobContext,
     TurnHandlingOptions,
     cli,
+    function_tool,
+    get_job_context,
     inference,
 )
 
-from outbound_call import IncidentCall, parse_incident_metadata
+from mcp_servers.servers import build_mcp_servers
+from outbound_call import (
+    IncidentCall,
+    parse_incident_metadata,
+    place_outbound_call_from_env,
+)
 
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+# The lead's number is collected in the frontend (localParticipant.setAttributes
+# {"lead_phone": "+1..."}); ONCALL_LEAD_PHONE env is the fallback for console / SIP-trigger.
+LEAD_PHONE_ATTR = "lead_phone"
+ONCALL_LEAD_ENV = "ONCALL_LEAD_PHONE"
+
+
+def lead_number_from_room(room, environ: dict | None = None) -> str | None:
+    """The on-call lead's number: frontend participant attribute first, env fallback."""
+    for participant in room.remote_participants.values():
+        number = (participant.attributes or {}).get(LEAD_PHONE_ATTR)
+        if number:
+            return number
+    env = environ if environ is not None else os.environ
+    return env.get(ONCALL_LEAD_ENV)
+
+
+async def dial_lead(
+    room_name: str,
+    number: str | None,
+    *,
+    place=place_outbound_call_from_env,
+) -> str:
+    """Dial the on-call lead into the given room. Returns a spoken-friendly status line —
+    never raises, so a failed call degrades to a sentence, not a crash."""
+    if not number:
+        return (
+            "I don't have the on-call lead's number yet, so I couldn't place the call."
+        )
+    try:
+        await place(room_name=room_name, to_phone_number=number)
+    except Exception:
+        logger.exception("outbound call to on-call lead failed")
+        return "I couldn't connect the call to the on-call lead just now."
+    return "I've dialed the on-call lead and they're joining the call now."
 
 
 def _incident_briefing(incident: IncidentCall) -> str:
@@ -96,22 +139,14 @@ class Assistant(Agent):
             instructions=instructions,
         )
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+    @function_tool
+    async def call_on_call_lead(self) -> str:
+        """Place a real outbound phone call to the on-call lead and bring them onto this
+        call to be briefed. Use when the user asks to call, page, or loop in the on-call
+        lead or engineer. Confirm with the user before invoking this."""
+        room = get_job_context().room
+        logger.info("placing outbound call to on-call lead")
+        return await dial_lead(room.name, lead_number_from_room(room))
 
 
 server = AgentServer()
@@ -152,6 +187,8 @@ async def my_agent(ctx: JobContext):
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
+        # HandFree's "hands": monitoring, deploy, github, and slack MCP tools.
+        mcp_servers=build_mcp_servers(),
     )
 
     # Start the session, which initializes the voice pipeline and warms up the models.
