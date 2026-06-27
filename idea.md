@@ -69,12 +69,12 @@ To survive a 4-hour build, we ruthlessly cut:
 
 ## 5. Tech stack
 
-- **Voice/runtime:** LiveKit Agents (Python) — start from telli's `telli-ai/livekit-agents` fork or `livekit-examples/voice-agent-hackathon`.
-- **STT / LLM / TTS:** whatever the starter ships (AssemblyAI / OpenAI / Cartesia). Don't swap.
-- **MCP:** official Python MCP SDK for our mock servers; official **GitHub MCP server** for the real one.
-- **telli:** wrap telli's outbound-call API in a thin MCP server exposing one tool: `telli.place_call(number, brief)`.
+- **Voice/runtime:** LiveKit Agents (Python) — **base = telli's `telli-ai/livekit-agents` fork** (sponsor stack; mentors can unblock us directly). Fallback base: `livekit-examples/voice-agent-hackathon`.
+- **MCP wiring:** use **LiveKit Agents' native MCP support** — pass our MCP servers straight into the agent session. No third-party glue repo needed. (Confirm telli's fork is current with LiveKit's MCP support; if pinned old, bump it or use the examples base. 2-min question for a telli mentor.)
+- **STT / LLM / TTS:** whatever the starter ships (AssemblyAI / OpenAI / Cartesia). Don't swap. Use sponsor API credits.
+- **MCP servers:** official Python MCP SDK for our mock servers; official **GitHub MCP server** for the real one.
+- **telli:** wrap telli's outbound-call API in a thin MCP server exposing one tool: `telli.place_call(number, brief)`. We have telli + LiveKit access already.
 - **Data:** one seeded SQLite file (`incident.db`) shared by the mock servers.
-- **Repo to study first:** `den-vasyliev/voice-mcp-agent` (LiveKit + MCP already wired) — clone, understand, strip down.
 
 ---
 
@@ -86,28 +86,36 @@ Framing for judges: HandFree turns telli from a product into critical infrastruc
 
 ---
 
-## 7. Four-hour task split (3 people)
+## 7. Three-person split (vertical slices, on the LiveKit × telli stack)
 
-**Hour 0–1 — foundation (everyone)**
-- A: Clone starter, get the bare voice loop running (speak → hear reply). Owns the LiveKit agent + LLM tool-calling glue.
-- B: Stand up the MCP layer — seed `incident.db`, write `monitoring` + `deploy` mock MCP servers (read paths first).
-- C: Get the **official GitHub MCP** server connected and authenticated; start the **telli MCP** wrapper.
+Owners are split by **vertical slice, not by layer**, so nobody is blocked waiting on another. Each owns a stub from minute 20 and grows it.
 
-**Hour 1–2 — read paths working end to end**
-- A: Wire MCP client into the agent; get steps 1 & 2 of the script (get_incidents, get_commits) answering by voice.
-- B: Finish `deploy.rollback` + `monitoring` data so numbers are consistent and believable.
-- C: telli MCP `place_call` stub returning a canned success; confirm GitHub MCP returns PR 2231.
+**Roles**
+- **A — Voice core (the brain):** the LiveKit × telli agent. Owns the audio loop, LLM tool-routing, and the **confirm-gate** for mutating calls. Is the live driver in the demo.
+- **B — MCP tools (the hands):** seed `incident.db`; build the mock `monitoring` + `deploy` MCP servers; wire the real **GitHub MCP**; later add Slack MCP. Owns data realism.
+- **C — telli + UI (the wow + the face):** the **telli MCP wrapper** (`place_call`) for the real outbound call, plus the web **tool-call feed** UI. Owns the demo's two showstoppers.
 
-**Hour 2–3 — writes + confirm-gate (the money hour)**
-- A: Implement confirm-gating for `mutating` tools (spoken "yes" required). Wire rollback + slack.post.
-- B: Slack MCP (real if a token is handy, else mock). Make the agent's spoken replies tight and scripted-feeling.
-- C: Make telli `place_call` place a **real** call to a teammate's phone; fallback to mock if flaky.
+**Shared first step (everyone, first 20 min):** clone telli's `livekit-agents` fork, run it, confirm one voice round-trip works (speak → hear reply) on LiveKit + telli access. Don't build until that's green. Confirm native MCP support is present (ask a telli mentor).
+
+**Hour 0–1 — stubs up**
+- A: Bare voice loop running on telli's fork; map the LLM's tool-call output to MCP calls.
+- B: `incident.db` seeded; `monitoring.get_incidents` + `deploy.rollback` mock servers (read paths first).
+- C: telli MCP `place_call` stub (canned success); skeleton web page that can render tool-call cards.
+
+**Hour 1–2 — read paths end to end**
+- A: Wire MCP servers into the agent session (native LiveKit MCP); script steps 1–2 answering by voice.
+- B: Real **GitHub MCP** connected, returns PR 2231; tune `monitoring` numbers to be consistent/believable.
+- C: UI shows live transcript + tool-call feed from the agent's events.
+
+**Hour 2–3 — writes + the money beats**
+- A: Implement **confirm-gating** (spoken "yes" required for `mutating` tools); wire rollback + slack.post.
+- B: Slack MCP (real if token handy, else mock); tighten the agent's spoken replies.
+- C: Make telli `place_call` place a **real** call to a teammate's phone; UI confirm-banner flashes on gated calls. Mock fallback behind same verb.
 
 **Hour 3–4 — FREEZE + rehearse**
 - No new features. Bug-fix only.
-- Rehearse the exact 5-step script ×3. Lock the phrasing of each command.
-- Record a screen+audio **fallback video** in case live audio dies on stage.
-- C drafts the 90-second pitch; A is the live driver; B watches logs and can hot-fix.
+- Rehearse the exact 5-step script ×3; lock the phrasing of every command.
+- C records a screen+audio **fallback video**; C drafts the 90-sec pitch. A drives live, B watches logs and hot-fixes.
 
 ---
 
