@@ -1,0 +1,1 @@
+/Users/kemalghifari/conductor/repos/jakarta-telli-hackathon/.claude/skills/gstack/open-gstack-browser/SKILL.md

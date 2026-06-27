@@ -1,0 +1,1 @@
+/Users/kemalghifari/conductor/repos/jakarta-telli-hackathon/.claude/skills/gstack/land-and-deploy/SKILL.md
