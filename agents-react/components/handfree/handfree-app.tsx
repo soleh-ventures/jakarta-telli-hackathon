@@ -3,9 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { TokenSource } from 'livekit-client';
 import { useLocalParticipant, useSession, useSessionContext } from '@livekit/components-react';
+import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
 import { Mic, Settings2 } from 'lucide-react';
 import type { AppConfig } from '@/app-config';
 import { AgentSessionProvider } from '@/components/agents-ui/agent-session-provider';
+import { StartAudioButton } from '@/components/agents-ui/start-audio-button';
+import { Toaster } from '@/components/ui/sonner';
+import { useAgentErrors } from '@/hooks/useAgentErrors';
+import { useDebugMode } from '@/hooks/useDebug';
 import { getSandboxTokenSource } from '@/lib/utils';
 import { HomeView } from './home-view';
 import { IncidentView } from './incident-view';
@@ -13,6 +18,15 @@ import { OnboardingWizard } from './onboarding-wizard';
 import { PostIncidentView } from './post-incident-view';
 import { STORAGE_KEY, type HandFreeConfig, type Mode } from './types';
 import { cx } from './ui';
+
+const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
+
+/** Mirrors the original App: debug logging + surfacing agent errors as toasts. */
+function AppSetup() {
+  useDebugMode({ enabled: IN_DEVELOPMENT });
+  useAgentErrors();
+  return null;
+}
 
 /** Pushes onboarding config to the agent as participant attributes on connect. */
 function SessionConfigSync({ config }: { config: HandFreeConfig }) {
@@ -129,6 +143,7 @@ export function HandFreeApp({ appConfig }: { appConfig: AppConfig }) {
 
   return (
     <AgentSessionProvider session={session}>
+      <AppSetup />
       <SessionConfigSync config={config} />
       <div className="flex h-svh flex-col bg-[#0a0a0c] text-[#ededef]">
         <Header mode={mode} onMode={setMode} onEdit={() => setConfig(null)} />
@@ -138,6 +153,22 @@ export function HandFreeApp({ appConfig }: { appConfig: AppConfig }) {
           {mode === 'post-incident' && <PostIncidentView />}
         </div>
       </div>
+
+      {/* Browsers block autoplay until a gesture — this lets the AI call's audio
+          actually play. Without it the call connects but stays silent. */}
+      <StartAudioButton label="Start Audio" />
+      <Toaster
+        icons={{ warning: <WarningIcon weight="bold" /> }}
+        position="top-center"
+        className="toaster group"
+        style={
+          {
+            '--normal-bg': 'var(--popover)',
+            '--normal-text': 'var(--popover-foreground)',
+            '--normal-border': 'var(--border)',
+          } as React.CSSProperties
+        }
+      />
     </AgentSessionProvider>
   );
 }
