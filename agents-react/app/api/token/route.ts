@@ -86,6 +86,10 @@ function createParticipantToken(
     canPublish: true,
     canPublishData: true,
     canSubscribe: true,
+    // Required for localParticipant.setAttributes() — the onboarding config
+    // (phone, repo, names) is pushed as attributes the agent reads. Without this
+    // the server silently drops the update and the agent never gets the number.
+    canUpdateOwnMetadata: true,
   };
   at.addGrant(grant);
 

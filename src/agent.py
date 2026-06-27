@@ -56,10 +56,13 @@ def to_e164(raw: str | None) -> str | None:
 
 
 def _room_attributes(room) -> dict:
+    # Merge across participants so the human's onboarding attributes survive once
+    # the SIP (phone) leg also joins the room mid-call.
+    merged: dict = {}
     for participant in room.remote_participants.values():
         if participant.attributes:
-            return dict(participant.attributes)
-    return {}
+            merged.update(participant.attributes)
+    return merged
 
 
 def read_onboarding(room) -> Onboarding:
@@ -300,8 +303,9 @@ class Assistant(Agent):
         call to be briefed. Use when the user asks to call, page, or loop in the on-call
         lead or engineer. Confirm with the user before invoking this."""
         room = get_job_context().room
-        logger.info("placing outbound call to on-call lead")
-        return await dial_lead(room.name, lead_number_from_room(room))
+        number = lead_number_from_room(room)
+        logger.info(f"placing outbound call to on-call lead: {number!r}")
+        return await dial_lead(room.name, number)
 
 
 server = AgentServer()
