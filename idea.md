@@ -2,7 +2,7 @@
 
 > **One-liner:** Speak once, your agents act. HandFree is a voice layer over the MCP ecosystem — query systems, write changes, and place real calls, completely hands-free. Demo vertical: **2am on-call incident response.**
 
-> **Built on:** LiveKit (telli's stack) + Model Context Protocol + telli outbound calling as an MCP actuator.
+> **Built on:** LiveKit (telli's stack) for voice + WebRTC + SIP telephony, and the Model Context Protocol for tools. The real outbound phone call is placed with **LiveKit SIP** (Twilio trunk).
 
 ---
 
@@ -29,78 +29,84 @@ To survive a 4-hour build, we ruthlessly cut:
 
 **Setting:** "It's 2am. Checkout is throwing 500s. Watch me fix prod without touching a keyboard."
 
-| # | Engineer says | HandFree does (MCP call) | HandFree replies |
+| # | Engineer says | HandFree does | HandFree replies |
 |---|---------------|--------------------------|------------------|
 | 1 | "What's failing?" | `monitoring.get_incidents()` (mock Datadog) | "Checkout API. 500s spiking, p99 at 4 seconds since the 1:40 deploy." |
 | 2 | "Who shipped it?" | `github.get_recent_commits()` (real GitHub MCP) | "Priya, PR 2231 — payment retry logic, merged 1:38." |
 | 3 | "Roll it back." | **confirm-gate** → `deploy.rollback(pr=2231)` (mock) | "Confirm: revert PR 2231 and redeploy? …Rolling back now, ETA 3 minutes." |
 | 4 | "Tell the team." | `slack.post(channel, msg)` (real or mock Slack MCP) | "Posted to #incidents." |
-| 5 | "Call the on-call lead and brief them." | **telli MCP** → real outbound phone call | "Calling now… Done. Lead acknowledged, joining the bridge." |
+| 5 | "Call the on-call lead and brief them." | **LiveKit SIP outbound call** → agent dials the lead's real phone | "Calling now… Done. Lead acknowledged, joining the bridge." |
 
 **The mic-drop close:** "Four tools, one real phone call, zero screens, 50 seconds. And HandFree doesn't know what DevOps is — it just speaks MCP. Swap the servers, and this same agent runs your warehouse floor or your hospital ward."
 
-**Why this wins:** universal gut-resonance (everyone's been paged), shows the abstraction (4 unrelated MCP servers, no glue code), shows production-grade judgment (confirm-gate on writes), and pulls telli in as a real actuator (sponsor prize).
+**Why this wins:** universal gut-resonance (everyone's been paged), shows the abstraction (4 unrelated MCP servers, no glue code), shows production-grade judgment (confirm-gate on writes), and ends with a **real outbound phone call** — the agent acting in the physical world.
 
 ---
 
 ## 4. Architecture
 
 ```
-  ┌─────────┐   audio    ┌────────────────────────────┐
-  │  Phone  │◄──────────►│  LiveKit Agent (telli kit)  │
-  │ / Web   │   WebRTC   │  STT → LLM → TTS loop       │
-  └─────────┘            │                              │
-                         │  ┌──────────────────────┐   │
-                         │  │  MCP Client / router  │   │
-                         │  └──────────┬───────────┘   │
-                         └─────────────┼───────────────┘
-                                       │ MCP (stdio/HTTP)
-        ┌──────────────┬───────────────┼───────────────┬──────────────┐
-        ▼              ▼               ▼               ▼              ▼
-  monitoring MCP   github MCP     deploy MCP       slack MCP      telli MCP
-   (mock,SQLite)   (official)   (mock,SQLite)   (real or mock)  (wrap telli API)
+  ┌─────────────┐  WebRTC   ┌────────────────────────────┐
+  │  Operator    │◄────────►│  LiveKit Agent (HandFree)   │
+  │  (web UI)    │  audio   │  STT → LLM → TTS loop       │
+  └─────────────┘           │                              │
+                            │  ┌──────────────────────┐   │
+                            │  │  MCP Client / router  │   │
+                            │  └──────────┬───────────┘   │
+       outbound SIP call    │             │ MCP (stdio/HTTP)
+  ┌─────────────┐  ◄────────┤             │
+  │ Human's      │          └─────────────┼───────────────┐
+  │ phone        │                        │               │
+  └─────────────┘     ┌──────────────┬────┴──────┬────────────┐
+                      ▼              ▼            ▼            ▼
+                monitoring MCP   github MCP   deploy MCP   slack MCP
+                 (mock,SQLite)   (official)  (mock,SQLite) (real/mock)
 ```
 
 - **LLM** decides which MCP tool to call from the transcript and fills arguments.
-- **Confirm-gate**: any tool tagged `mutating: true` (rollback, slack.post, telli.call) requires a spoken "yes" before execution. This is both a safety story and a demo beat.
+- **Two outbound channels reach the human, both agent-initiated (no inbound):** WebRTC (operator web UI) and a real **outbound phone call over LiveKit SIP**. Redundant — if one fails to reach the human, the other does.
+- **Confirm-gate**: any tool tagged `mutating: true` (rollback, slack.post, the outbound call) requires a spoken "yes" before execution. This is both a safety story and a demo beat.
 - **Mock servers** are ~30-line Python MCP servers reading/writing a seeded SQLite DB so the data looks real and consistent across the demo.
 
 ---
 
 ## 5. Tech stack
 
-- **Voice/runtime:** LiveKit Agents (Python) — **base = telli's `telli-ai/livekit-agents` fork** (sponsor stack; mentors can unblock us directly). Fallback base: `livekit-examples/voice-agent-hackathon`.
-- **MCP wiring:** use **LiveKit Agents' native MCP support** — pass our MCP servers straight into the agent session. No third-party glue repo needed. (Confirm telli's fork is current with LiveKit's MCP support; if pinned old, bump it or use the examples base. 2-min question for a telli mentor.)
-- **STT / LLM / TTS:** whatever the starter ships (AssemblyAI / OpenAI / Cartesia). Don't swap. Use sponsor API credits.
+- **Voice/runtime:** LiveKit Agents (Python), scaffolded from the `agent-starter-python` template. Use sponsor API credits.
+- **MCP wiring:** use **LiveKit Agents' native MCP support** — pass our MCP servers straight into the agent session. No third-party glue repo needed.
+- **STT / LLM / TTS:** whatever the starter ships (Deepgram / OpenAI / Cartesia via LiveKit Inference). Don't swap.
 - **MCP servers:** official Python MCP SDK for our mock servers; official **GitHub MCP server** for the real one.
-- **telli:** wrap telli's outbound-call API in a thin MCP server exposing one tool: `telli.place_call(number, brief)`. We have telli + LiveKit access already.
+- **Outbound call:** **LiveKit SIP** via a Twilio Elastic SIP Trunk. The agent dispatches into a room and dials the human's phone into it. See [docs/outbound-calling.md](docs/outbound-calling.md). **No telli MCP.**
+- **Web UI:** LiveKit React/Next.js frontend (`agents-react/`) — the operator's WebRTC interface and tool-call feed.
 - **Data:** one seeded SQLite file (`incident.db`) shared by the mock servers.
 
 ---
 
-## 6. The telli angle (sponsor prize)
+## 6. The real-world actuator (the "wow")
 
-telli is outbound voice. We make **telli a tool HandFree calls**, not a competitor. Wrap telli's calling API as an MCP server with one verb: `place_call(number, brief)`. In the demo, "Call the on-call lead and brief them" triggers a *real outbound phone call placed by telli*, which reports back into the voice loop.
+The showstopper is that HandFree **acts in the physical world**: a real phone rings. When the agent decides to reach the human, it places a **real outbound phone call over LiveKit SIP** (Twilio trunk) — the agent is dispatched into a room and the human's phone is dialed in, where the agent briefs them by voice.
 
-Framing for judges: HandFree turns telli from a product into critical infrastructure inside a bigger agentic loop. Voice in → reason over MCP → telli executes a real call in the physical world.
+Two outbound channels carry this, for demo resilience: the **WebRTC** web UI and the **phone (SIP)** call. Both are outbound and agent-initiated; there is no inbound path. If venue wifi or browser audio kills one channel, the other still reaches the human.
+
+Framing for judges: voice in → reason over MCP → the agent executes a **real call in the physical world**.
 
 ---
 
-## 7. Three-person split (vertical slices, on the LiveKit × telli stack)
+## 7. Three-person split (vertical slices)
 
 Owners are split by **vertical slice, not by layer**, so nobody is blocked waiting on another. Each owns a stub from minute 20 and grows it.
 
 **Roles**
-- **A — Voice core (the brain):** the LiveKit × telli agent. Owns the audio loop, LLM tool-routing, and the **confirm-gate** for mutating calls. Is the live driver in the demo.
+- **A — Voice core (the brain):** the LiveKit agent. Owns the audio loop, LLM tool-routing, and the **confirm-gate** for mutating calls. Is the live driver in the demo.
 - **B — MCP tools (the hands):** seed `incident.db`; build the mock `monitoring` + `deploy` MCP servers; wire the real **GitHub MCP**; later add Slack MCP. Owns data realism.
-- **C — telli + UI (the wow + the face):** the **telli MCP wrapper** (`place_call`) for the real outbound call, plus the web **tool-call feed** UI. Owns the demo's two showstoppers.
+- **C — UI + outbound call (the wow + the face):** the **LiveKit SIP outbound call** to the human (`src/outbound_call/` package), plus the web **WebRTC UI + tool-call feed** (`agents-react/`). Owns the demo's two showstoppers.
 
-**Shared first step (everyone, first 20 min):** clone telli's `livekit-agents` fork, run it, confirm one voice round-trip works (speak → hear reply) on LiveKit + telli access. Don't build until that's green. Confirm native MCP support is present (ask a telli mentor).
+**Shared first step (everyone, first 20 min):** run the LiveKit agent, confirm one voice round-trip works (speak → hear reply) on LiveKit access. Don't build until that's green.
 
 **Hour 0–1 — stubs up**
-- A: Bare voice loop running on telli's fork; map the LLM's tool-call output to MCP calls.
+- A: Bare voice loop running; map the LLM's tool-call output to MCP calls.
 - B: `incident.db` seeded; `monitoring.get_incidents` + `deploy.rollback` mock servers (read paths first).
-- C: telli MCP `place_call` stub (canned success); skeleton web page that can render tool-call cards.
+- C: Outbound SIP call stub (canned success); skeleton WebRTC web page that can render tool-call cards.
 
 **Hour 1–2 — read paths end to end**
 - A: Wire MCP servers into the agent session (native LiveKit MCP); script steps 1–2 answering by voice.
@@ -110,7 +116,7 @@ Owners are split by **vertical slice, not by layer**, so nobody is blocked waiti
 **Hour 2–3 — writes + the money beats**
 - A: Implement **confirm-gating** (spoken "yes" required for `mutating` tools); wire rollback + slack.post.
 - B: Slack MCP (real if token handy, else mock); tighten the agent's spoken replies.
-- C: Make telli `place_call` place a **real** call to a teammate's phone; UI confirm-banner flashes on gated calls. Mock fallback behind same verb.
+- C: Make the **outbound SIP call** place a **real** call to a teammate's phone; UI confirm-banner flashes on gated calls. Mock fallback behind same trigger.
 
 **Hour 3–4 — FREEZE + rehearse**
 - No new features. Bug-fix only.
@@ -125,10 +131,10 @@ Owners are split by **vertical slice, not by layer**, so nobody is blocked waiti
 |------|-----------|
 | Live audio/mic fails on stage | Pre-recorded fallback video of a clean run. |
 | STT mishears the command | Hardcode short, distinct trigger phrases; rehearse exact wording. |
-| telli call flaky over venue wifi | Mock path behind the same MCP verb; flip a flag. |
-| Judge knows `voice-mcp-agent` exists | Lead with execution: confirm-gating + multi-tool + telli actuator. That repo is a single-tool toy; we out-execute it. |
+| Outbound call flaky over venue wifi | Mock path behind the same trigger; the WebRTC channel is the redundant reach. |
+| Judge knows `voice-mcp-agent` exists | Lead with execution: confirm-gating + multi-tool + a real outbound call. That repo is a single-tool toy; we out-execute it. |
 | "Universal" reads as unfocused | Anchor the whole live demo in DevOps; reveal vertical-swap only as the closing line. |
-| Scope creep kills the build | Hard freeze at hour 3. One vertical, 3+telli tools, no UI polish. |
+| Scope creep kills the build | Hard freeze at hour 3. One vertical, 3 tools + the real call, no UI polish. |
 
 ---
 
@@ -137,7 +143,7 @@ Owners are split by **vertical slice, not by layer**, so nobody is blocked waiti
 1. **Hook:** "Everyone here has been paged at 2am. You still had to open a laptop." (1 line)
 2. **Live demo:** run the 5-step script. Let it breathe. (50s)
 3. **The reveal:** "HandFree doesn't know what DevOps is. It speaks MCP. Swap the servers — warehouse, clinic, kitchen." (10s)
-4. **The telli beat:** "And when it needs to act in the real world, it places a real call through telli." (5s)
+4. **The real-world beat:** "And when it needs to act in the real world, it places a real outbound phone call." (5s)
 5. **Close:** "HandFree — the voice layer for the entire MCP ecosystem." (1 line)
 
 ---
@@ -148,7 +154,7 @@ Owners are split by **vertical slice, not by layer**, so nobody is blocked waiti
 - [ ] 3 MCP tools answering: monitoring (read), github (read), deploy (write).
 - [ ] Confirm-gate enforced on at least one mutating call (rollback).
 - [ ] Slack post works (real or mock).
-- [ ] telli `place_call` fires (real preferred, mock acceptable).
+- [ ] Outbound SIP call fires to a real phone (mock acceptable as fallback).
 - [ ] Full 5-step script runs clean 3× in rehearsal.
 - [ ] Fallback recording captured.
 - [ ] 90-second pitch locked, driver assigned.
