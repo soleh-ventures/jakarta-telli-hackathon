@@ -1,28 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { AlertTriangle, ArrowDown, Check, ChevronRight, Loader2 } from 'lucide-react';
-import {
-  HYPOTHESIS,
-  INVESTIGATION,
-  RECOMMENDATIONS,
-  type Recommendation,
-} from './mock-data';
+import { AlertTriangle, ArrowDown, Check, ChevronRight, Loader2, X } from 'lucide-react';
+import { useHandFreeEvents } from '@/hooks/use-handfree-events';
+import { RECOMMENDATIONS, type Recommendation } from './mock-data';
 import { ThinkingPanel } from './thinking-panel';
+import type { HandFreeConfig } from './types';
 import { Card, SectionLabel, SystemIcon, T } from './ui';
 import { VoiceDock } from './voice-dock';
-import type { HandFreeConfig } from './types';
 
 export function IncidentView({ config }: { config: HandFreeConfig }) {
-  // Reveal investigation steps one at a time so the pipeline feels live.
-  const total = INVESTIGATION.length + 1; // + hypothesis
-  const [revealed, setRevealed] = useState(1);
-
-  useEffect(() => {
-    if (revealed >= total) return;
-    const id = setTimeout(() => setRevealed((r) => r + 1), 1100);
-    return () => clearTimeout(id);
-  }, [revealed, total]);
+  // Live investigation: each step is a real tool the agent executed (see agent.py
+  // attach_event_bus). No timers, no mock data — the pipeline grows as it works.
+  const { tools, agentState } = useHandFreeEvents();
+  const working = agentState === 'thinking' || agentState === 'initializing';
 
   return (
     <div className="flex h-full">
@@ -50,67 +40,62 @@ export function IncidentView({ config }: { config: HandFreeConfig }) {
                 <h1 className="mt-1 text-[22px] font-semibold tracking-tight">Checkout API</h1>
               </div>
               <div className="text-right text-[13px] text-[#9b9ba3]">
-                <div className="font-medium text-[#ededef]">Started 2 minutes ago</div>
-                <div className="text-[#6a6a73]">09:41 · {config.githubRepo.split('/')[1]}</div>
+                <div className="font-medium text-[#ededef]">Live incident</div>
+                <div className="text-[#6a6a73]">{config.githubRepo.split('/')[1]}</div>
               </div>
             </div>
           </div>
 
           <div className="mt-8 grid grid-cols-1 gap-7 lg:grid-cols-[1.25fr_1fr]">
-            {/* Investigation pipeline */}
+            {/* Investigation pipeline — live */}
             <div>
               <SectionLabel>AI investigation</SectionLabel>
               <div className="space-y-3">
-                {INVESTIGATION.map((step, i) => (
+                {tools.length === 0 && !working && (
+                  <Card className="p-4 text-[13px] text-[#6a6a73]">
+                    Listening for incident activity… ask HandFree what&apos;s failing to begin.
+                  </Card>
+                )}
+
+                {tools.map((t, i) => (
                   <PipelineStep
-                    key={step.id}
-                    icon={step.id}
-                    label={step.label}
-                    finding={step.finding}
-                    done={step.done}
-                    state={i < revealed ? 'done' : i === revealed ? 'active' : 'pending'}
-                    connector={i < INVESTIGATION.length - 1 || revealed >= total - 1}
+                    key={`${t.ts}-${i}`}
+                    icon={t.system}
+                    label={t.label}
+                    finding={t.finding}
+                    state={t.status === 'error' ? 'error' : 'done'}
+                    connector={i < tools.length - 1 || working}
                   />
                 ))}
 
-                {revealed >= total && (
-                  <Card className="border-[#37356f] bg-[#16162a]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[13px] font-semibold tracking-wide text-[#a5a3f8] uppercase">
-                        Hypothesis
-                      </span>
-                      <span className="text-[13px] font-bold text-[#a5a3f8]">
-                        {HYPOTHESIS.confidence}% confidence
-                      </span>
-                    </div>
-                    <p className="mt-2 text-[15px] font-medium text-[#ededef]">
-                      {HYPOTHESIS.statement}
-                    </p>
-                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#23242b]">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-[#6e6bf2] to-[#9d6bf2]"
-                        style={{ width: `${HYPOTHESIS.confidence}%` }}
-                      />
-                    </div>
-                  </Card>
+                {working && (
+                  <PipelineStep
+                    icon="metrics"
+                    label="Analyzing…"
+                    finding=""
+                    state="active"
+                    connector={false}
+                  />
                 )}
               </div>
             </div>
 
-            {/* Recommendations */}
-            <div>
-              <SectionLabel>Recommendations</SectionLabel>
-              <div className="space-y-3">
-                {RECOMMENDATIONS.map((r) => (
-                  <RecommendationCard key={r.label} rec={r} />
-                ))}
+            {/* Suggested actions — advisory; appears once the investigation is underway */}
+            {tools.length > 0 && (
+              <div>
+                <SectionLabel>Suggested actions</SectionLabel>
+                <div className="space-y-3">
+                  {RECOMMENDATIONS.map((r) => (
+                    <RecommendationCard key={r.label} rec={r} />
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
 
-      <ThinkingPanel />
+      <ThinkingPanel agentState={agentState} tools={tools} />
 
       {/* Voice lives in a bottom dock so the investigation stays the focus. */}
       <VoiceDock config={config} />
@@ -122,37 +107,32 @@ function PipelineStep({
   icon,
   label,
   finding,
-  done,
   state,
   connector,
 }: {
   icon: string;
   label: string;
   finding: string;
-  done: boolean;
-  state: 'done' | 'active' | 'pending';
+  state: 'done' | 'active' | 'error';
   connector: boolean;
 }) {
   const isActive = state === 'active';
-  const isPending = state === 'pending';
   return (
     <div className="relative">
-      <Card
-        className="flex items-start gap-3.5 p-4 transition-opacity"
-        style={{ opacity: isPending ? 0.4 : 1 }}
-      >
+      <Card className="flex items-start gap-3.5 p-4">
         <span
           className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full"
           style={{
-            backgroundColor: state === 'done' ? '#11281a' : isActive ? '#16162a' : '#1a1b1f',
+            backgroundColor:
+              state === 'done' ? '#11281a' : state === 'error' ? '#2a1414' : '#16162a',
           }}
         >
           {state === 'done' ? (
             <Check className="size-4 text-[#35c98e]" />
-          ) : isActive ? (
-            <Loader2 className="size-4 animate-spin text-[#a5a3f8]" />
+          ) : state === 'error' ? (
+            <X className="size-4 text-[#f25555]" />
           ) : (
-            <SystemIcon id={icon} className="size-4 text-[#6a6a73]" />
+            <Loader2 className="size-4 animate-spin text-[#a5a3f8]" />
           )}
         </span>
         <div className="flex-1">
@@ -161,10 +141,8 @@ function PipelineStep({
             <span className="text-[14.5px] font-medium">{label}</span>
             <ChevronRight className="ml-auto size-4 text-[#3a3b42]" />
           </div>
-          {state === 'done' && done && (
-            <p className="mt-1.5 text-[13px] text-[#9b9ba3]">{finding}</p>
-          )}
-          {isActive && <p className="mt-1.5 text-[13px] text-[#6a6a73]">Analyzing…</p>}
+          {finding && !isActive && <p className="mt-1.5 text-[13px] text-[#9b9ba3]">{finding}</p>}
+          {isActive && <p className="mt-1.5 text-[13px] text-[#6a6a73]">Working…</p>}
         </div>
       </Card>
       {connector && (

@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
 import os
 import re
 import textwrap
+import time
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -91,6 +93,76 @@ async def await_onboarding(
         if cfg.primary_phone or cfg.github_repo or loop.time() >= deadline:
             return cfg
         await asyncio.sleep(interval)
+
+
+# --- Event bus: agent -> dashboard ----------------------------------------
+# The agent publishes each tool call (and its own state) on the "handfree" data
+# topic; the React dashboard subscribes (use-handfree-events.ts) and renders the
+# live investigation timeline instead of mock data.
+EVENT_TOPIC = "handfree"
+
+# Map a tool name to (dashboard system-icon id, human label).
+_TOOL_MAP: list[tuple[str, tuple[str, str]]] = [
+    ("incident", ("datadog", "Monitoring")),
+    ("commit", ("github", "GitHub Analysis")),
+    ("pull_request", ("github", "GitHub Analysis")),
+    ("rollback", ("metrics", "Deploy Rollback")),
+    ("post", ("slack", "Slack Notification")),
+    ("call", ("telli", "Calling On-call")),
+]
+
+
+def _tool_meta(name: str) -> tuple[str, str]:
+    lowered = name.lower()
+    for key, meta in _TOOL_MAP:
+        if key in lowered:
+            return meta
+    return ("logs", name)
+
+
+def tool_event(name: str, output_text: str | None, *, status: str = "done") -> dict:
+    """Shape one executed tool call for the dashboard timeline."""
+    system, label = _tool_meta(name)
+    finding = " ".join((output_text or "").split())
+    if len(finding) > 140:
+        finding = finding[:139] + "…"
+    return {
+        "kind": "tool",
+        "system": system,
+        "label": label,
+        "finding": finding or "Done",
+        "status": status,
+        "ts": int(time.time() * 1000),
+    }
+
+
+def attach_event_bus(session, room) -> None:
+    """Publish tool-call and agent-state events to the dashboard over the data channel."""
+    pending: set = set()  # keep strong refs so fire-and-forget tasks aren't GC'd
+
+    def publish(event: dict) -> None:
+        data = json.dumps(event).encode()
+        task = asyncio.create_task(
+            room.local_participant.publish_data(data, topic=EVENT_TOPIC, reliable=True)
+        )
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    @session.on("function_tools_executed")
+    def _on_tools(ev) -> None:
+        for call, output in zip(ev.function_calls, ev.function_call_outputs):
+            text = None if output is None else str(getattr(output, "output", output))
+            publish(
+                tool_event(
+                    call.name, text, status="error" if output is None else "done"
+                )
+            )
+
+    @session.on("agent_state_changed")
+    def _on_state(ev) -> None:
+        publish(
+            {"kind": "state", "state": str(ev.new_state), "ts": int(time.time() * 1000)}
+        )
 
 
 async def dial_lead(
@@ -293,6 +365,9 @@ async def my_agent(ctx: JobContext):
         agent=Assistant(incident=incident, onboarding=onboarding),
         room=ctx.room,
     )
+
+    # Stream tool calls + agent state to the dashboard (use-handfree-events.ts).
+    attach_event_bus(session, ctx.room)
 
     # On an incident call, the agent speaks first to brief the lead once they pick up.
     if incident is not None:
