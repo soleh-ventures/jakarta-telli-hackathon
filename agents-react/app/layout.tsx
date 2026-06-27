@@ -63,7 +63,10 @@ export default async function RootLayout({ children }: RootLayoutProps) {
         <title>{pageTitle}</title>
         <meta name="description" content={pageDescription} />
       </head>
-      <body className="overflow-x-hidden bg-[#0a0a0c]">
+      {/* suppressHydrationWarning: browser extensions (e.g. Grammarly) inject
+          data-gr-* attributes onto <body> before React hydrates, which otherwise
+          trips a hydration mismatch. This silences only that attribute diff. */}
+      <body className="overflow-x-hidden bg-[#ffffff]" suppressHydrationWarning>
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"

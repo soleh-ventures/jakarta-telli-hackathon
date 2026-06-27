@@ -29,10 +29,35 @@ export type HandFreeConfig = {
   backupPhone: string;
 };
 
-/** The three top-level surfaces the operator can be in. */
-export type Mode = 'monitoring' | 'incident' | 'post-incident';
+/** Top-level product surfaces in the console sidebar. */
+export type NavKey = 'overview' | 'incidents' | 'integrations' | 'settings';
 
 export const STORAGE_KEY = 'handfree.config.v2';
+export const INCIDENTS_KEY = 'handfree.incidents.v1';
+
+export type TranscriptTurn = { who: 'lead' | 'ai'; text: string };
+
+export type IncidentToolStep = {
+  system: string;
+  label: string;
+  finding: string;
+  status: 'done' | 'error';
+  ts: number;
+};
+
+/** A handled incident, persisted locally so the history/overview are real (built
+ *  from actual runs), not mock data. Recorded live by IncidentRecorder. */
+export type IncidentRecord = {
+  id: string;
+  startedAt: number;
+  endedAt?: number;
+  service: string;
+  severity: string;
+  lead: string;
+  status: 'active' | 'resolved';
+  tools: IncidentToolStep[];
+  transcript: TranscriptTurn[];
+};
 
 export const DEMO_CONFIG: HandFreeConfig = {
   githubRepo: 'soleh-ventures/jakarta-telli-hackathon',
@@ -47,9 +72,9 @@ export const DEMO_CONFIG: HandFreeConfig = {
   },
   sensitivity: 'balanced',
   primaryName: 'Kemal',
-  primaryPhone: '+49 1522 4496645',
+  primaryPhone: '+49 176 28950549',
   backupName: 'Azhar',
-  backupPhone: '+49 176 28950549',
+  backupPhone: '+49 1522 4496645',
 };
 
 /** Repos selectable in onboarding (hardcoded for the demo). */

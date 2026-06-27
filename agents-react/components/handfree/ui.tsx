@@ -1,16 +1,27 @@
 'use client';
 
+import { useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
+  Activity,
+  Bell,
+  Bug,
   Boxes,
   Cloud,
+  Eye,
+  EyeOff,
+  Flame,
+  Gauge,
+  GitBranch,
   Github,
+  Globe,
+  LineChart,
   Phone,
   Radio,
   Server,
+  ShieldAlert,
   Slack,
-  Activity,
-  Bell,
+  SquareKanban,
 } from 'lucide-react';
 import { cn } from '@/lib/shadcn/utils';
 
@@ -20,15 +31,15 @@ import { cn } from '@/lib/shadcn/utils';
 // whole HandFree surface stays consistent.
 // ---------------------------------------------------------------------------
 export const T = {
-  bg: '#0a0a0c',
-  surface: '#141518',
-  surfaceHi: '#1a1b1f',
-  border: '#1f2024',
-  text: '#ededef',
-  textDim: '#9b9ba3',
-  textFaint: '#6a6a73',
+  bg: '#ffffff',
+  surface: '#ffffff',
+  surfaceHi: '#f1f1f4',
+  border: '#e6e6ea',
+  text: '#16161a',
+  textDim: '#5b5b66',
+  textFaint: '#82828d',
   accent: '#6e6bf2',
-  accentSoft: '#a5a3f8',
+  accentSoft: '#6e6bf2',
   red: '#f25555',
   green: '#35c98e',
   amber: '#e3b341',
@@ -39,14 +50,10 @@ export function cx(...parts: Array<string | false | undefined>) {
 }
 
 /** Rounded, low-border elevated card — the core container of the app. */
-export function Card({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<'div'>) {
+export function Card({ className, children, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn('rounded-2xl border border-[#1f2024] bg-[#141518] p-5', className)}
+      className={cn('rounded-2xl border border-[#e6e6ea] bg-[#ffffff] p-5', className)}
       {...props}
     >
       {children}
@@ -56,7 +63,7 @@ export function Card({
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-3 text-[12px] font-medium tracking-wide text-[#6a6a73] uppercase">
+    <div className="mb-3 text-[12px] font-medium tracking-wide text-[#82828d] uppercase">
       {children}
     </div>
   );
@@ -89,10 +96,7 @@ export function HealthBadge({ health }: { health: Health }) {
   };
   const { label, color } = map[health];
   return (
-    <span
-      className="inline-flex items-center gap-1.5 text-[12.5px] font-medium"
-      style={{ color }}
-    >
+    <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color }}>
       <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
       {label}
     </span>
@@ -106,15 +110,53 @@ export const SYSTEM_ICON: Record<string, LucideIcon> = {
   kubernetes: Boxes,
   slack: Slack,
   telli: Phone,
+  telephony: Phone,
   pagerduty: Bell,
+  opsgenie: Bell,
   aws: Cloud,
   azure: Cloud,
   gcp: Cloud,
+  cloudwatch: Gauge,
   logs: Server,
+  splunk: Server,
   metrics: Radio,
+  sentry: Bug,
+  grafana: LineChart,
+  prometheus: Flame,
+  jira: SquareKanban,
+  linear: GitBranch,
+  statuspage: Globe,
+  honeycomb: ShieldAlert,
 };
 
 export function SystemIcon({ id, className }: { id: string; className?: string }) {
   const Icon = SYSTEM_ICON[id] ?? Server;
   return <Icon className={className} />;
+}
+
+/** Mask a phone number bank-style: keep formatting, reveal only the last 4 digits. */
+export function maskPhone(raw: string): string {
+  const total = (raw.match(/\d/g) || []).length;
+  let seen = 0;
+  return raw.replace(/\d/g, (d) => (++seen > total - 4 ? d : '•'));
+}
+
+/** A phone number that is censored by default (like a bank hiding a balance), with
+ *  an eye toggle to reveal it. Keeps sensitive contact details off-screen. */
+export function PhoneNumber({ value, className }: { value: string; className?: string }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <span className={cn('inline-flex items-center gap-1.5', className)}>
+      <span className="tabular-nums">{shown ? value : maskPhone(value)}</span>
+      <button
+        type="button"
+        onClick={() => setShown((s) => !s)}
+        className="text-[#b8b8c0] transition-colors hover:text-[#5b5b66]"
+        title={shown ? 'Hide number' : 'Reveal number'}
+        aria-label={shown ? 'Hide number' : 'Reveal number'}
+      >
+        {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+      </button>
+    </span>
+  );
 }

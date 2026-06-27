@@ -36,6 +36,7 @@ load_dotenv(".env.local")
 PRIMARY_PHONE_ATTR = "primary_phone"
 BACKUP_PHONE_ATTR = "backup_phone"
 PRIMARY_NAME_ATTR = "primary_name"
+BACKUP_NAME_ATTR = "backup_name"
 GITHUB_REPO_ATTR = "github_repo"
 ONCALL_LEAD_ENV = "ONCALL_LEAD_PHONE"
 
@@ -44,6 +45,8 @@ ONCALL_LEAD_ENV = "ONCALL_LEAD_PHONE"
 class Onboarding:
     primary_name: str | None = None
     primary_phone: str | None = None  # normalized E.164
+    backup_name: str | None = None
+    backup_phone: str | None = None  # normalized E.164
     github_repo: str | None = None
 
 
@@ -70,8 +73,9 @@ def read_onboarding(room) -> Onboarding:
     attrs = _room_attributes(room)
     return Onboarding(
         primary_name=attrs.get(PRIMARY_NAME_ATTR) or None,
-        primary_phone=to_e164(attrs.get(PRIMARY_PHONE_ATTR))
-        or to_e164(attrs.get(BACKUP_PHONE_ATTR)),
+        primary_phone=to_e164(attrs.get(PRIMARY_PHONE_ATTR)),
+        backup_name=attrs.get(BACKUP_NAME_ATTR) or None,
+        backup_phone=to_e164(attrs.get(BACKUP_PHONE_ATTR)),
         github_repo=attrs.get(GITHUB_REPO_ATTR) or None,
     )
 
@@ -81,6 +85,8 @@ def lead_number_from_room(room, environ: dict | None = None) -> str | None:
     cfg = read_onboarding(room)
     if cfg.primary_phone:
         return cfg.primary_phone
+    if cfg.backup_phone:
+        return cfg.backup_phone
     env = environ if environ is not None else os.environ
     return to_e164(env.get(ONCALL_LEAD_ENV))
 
@@ -127,6 +133,10 @@ def tool_event(name: str, output_text: str | None, *, status: str = "done") -> d
     """Shape one executed tool call for the dashboard timeline."""
     system, label = _tool_meta(name)
     finding = " ".join((output_text or "").split())
+    # The slack tool returns a {ok, channel} dict; show a human line on the timeline
+    # instead of the raw repr.
+    if status == "done" and system == "slack":
+        finding = "Posted incident summary to #incidents"
     if len(finding) > 140:
         finding = finding[:139] + "…"
     return {
@@ -171,16 +181,52 @@ def attach_event_bus(session, room) -> None:
 # The dashboard's "Trigger incident" button sends this on the control topic.
 CONTROL_TOPIC = "handfree-control"
 _INCIDENT_OPENING = (
-    "An incident just fired. The Checkout API is returning 500 errors after a recent "
-    "deploy. You have just called the on-call engineer. Greet them by name if you know "
-    "it, tell them Checkout is throwing 500s since the latest deploy, and ask if they "
-    "want you to investigate."
+    "You are calling the on-call engineer about a live incident. Open the call like a "
+    "real colleague would, not a script: a short warm greeting (use their name if you "
+    "know it), a quick apology for the hour, then in one or two natural sentences tell "
+    "them the Checkout API is throwing 500 errors since the latest deploy and that you "
+    "can walk them through it. Sound human, calm, and concise. Then ask if they want "
+    "the quick rundown."
 )
+
+
+def focus_audio_on_phone(session, number: str | None) -> None:
+    """Link the agent's audio input to the on-call lead's phone (SIP) participant,
+    not whoever joined first (e.g. the dashboard browser). Without this, a UI-triggered
+    incident leaves the agent listening to the browser mic while the lead talks on the
+    phone and is never heard. The SIP leg joins as ``phone:<number>`` (outbound_call/sip.py)."""
+    if not number:
+        return
+    room_io = getattr(session, "_room_io", None)
+    if room_io is None:
+        return
+    room_io.set_participant(f"phone:{number}")
+    logger.info(f"agent audio input now linked to phone:{number}")
+
+
+_PENDING_PUB: set = set()  # strong refs so fire-and-forget publishes aren't GC'd
+
+
+def publish_event(room, event: dict) -> None:
+    """Publish one dashboard event over the data channel. Guarded so it's a no-op
+    when there's no real room (tests) instead of raising."""
+    lp = getattr(room, "local_participant", None)
+    if lp is None:
+        return
+    try:
+        task = asyncio.create_task(
+            lp.publish_data(json.dumps(event).encode(), topic=EVENT_TOPIC, reliable=True)
+        )
+        _PENDING_PUB.add(task)
+        task.add_done_callback(_PENDING_PUB.discard)
+    except Exception:
+        logger.debug("publish_event failed", exc_info=True)
 
 
 def attach_incident_trigger(session, ctx, *, place=place_outbound_call_from_env):
     """When the dashboard fires 'trigger_incident', call the on-call lead and open the
-    incident on that call. Returns the runner (exposed for testing)."""
+    incident on that call. Escalates to the backup if the primary doesn't answer.
+    Returns the runner (exposed for testing)."""
     room = ctx.room
     fired = {"v": False}
     pending: set = set()  # keep strong refs so the scheduled task isn't GC'd
@@ -189,13 +235,37 @@ def attach_incident_trigger(session, ctx, *, place=place_outbound_call_from_env)
         if fired["v"]:
             return  # one incident per session
         fired["v"] = True
-        number = lead_number_from_room(room)
-        logger.info(f"incident triggered from UI; dialing lead {number!r}")
-        if number:
+        cfg = read_onboarding(room)
+        primary = cfg.primary_phone or lead_number_from_room(room)
+        backup = cfg.backup_phone
+
+        async def try_dial(number: str | None, who: str) -> bool:
+            # place() waits until answered, so a no-answer/decline raises — that's the
+            # escalation signal. Returns True only when the call actually connected.
+            if not number:
+                return False
+            publish_event(room, tool_event("call", f"Calling {who}…"))
+            logger.info(f"incident: dialing {who} at {number!r}")
             try:
                 await place(room_name=room.name, to_phone_number=number)
+                focus_audio_on_phone(session, number)  # listen to that phone leg
+                return True
             except Exception:
-                logger.exception("incident trigger: outbound call failed")
+                logger.exception(f"incident: call to {who} failed")
+                return False
+
+        reached = await try_dial(primary, cfg.primary_name or "the on-call lead")
+        if not reached and backup:
+            publish_event(
+                room,
+                tool_event(
+                    "call",
+                    f"No answer from {cfg.primary_name or 'primary'} — escalating to "
+                    f"{cfg.backup_name or 'backup'}",
+                ),
+            )
+            reached = await try_dial(backup, cfg.backup_name or "the backup")
+
         await session.generate_reply(instructions=_INCIDENT_OPENING)
 
     def on_data(packet) -> None:
@@ -290,9 +360,29 @@ _INCIDENT_INSTRUCTIONS = textwrap.dedent(
 
     # Incident response (HandFree)
 
-    During a production incident the engineer drives you by voice. Investigate and act through your tools:
-    - Check what is failing, find the suspect deploy and who shipped it, then on request roll it back, post to Slack, or call the on-call lead.
-    - Before any action that changes systems or places a phone call (rollback, Slack post, calling the lead), say what you will do in one sentence and wait for the engineer to say yes. Never act without that confirmation.
+    You are the on-call assistant, on a phone call with the responsible engineer during a live
+    production incident. Talk like a calm, capable colleague who just got paged — natural and
+    warm, never robotic or list-like. Lead with what matters, keep it to a sentence or two,
+    react to what they say, and explain things in plain language (no jargon dumps, no reading
+    out identifiers). It's a real conversation, not a status readout.
+
+    Investigate and act through your tools:
+    - Check what is failing, find the suspect deploy and who shipped it, then on request roll it
+      back, post to Slack, or call someone.
+    - Before any action that changes systems or places a phone call (rollback, Slack post,
+      calling the lead), say what you'll do in one sentence and wait for them to say yes. Never
+      act without that confirmation.
+
+    Slack incident report:
+    - When they ask you to notify or update the team, or right after a rollback, offer to post
+      the incident report. On a yes, use the Slack post tool to post to the "#incidents" channel.
+    - The Slack message is written text, not speech, so format it as a tight, skimmable report —
+      not an essay. Include: a title line with severity and the affected service; one line of
+      impact (the symptom and the numbers); the suspect pull request with its GitHub URL and who
+      shipped it; the action taken (and the revert pull request URL if you rolled back); the
+      current status; and the most relevant link or two. Use the REAL links your tools returned
+      (the pull request URL, the revert PR URL) — never invent links.
+    - After it posts, tell the engineer in one sentence that the report is up.
     """
 )
 
@@ -380,8 +470,13 @@ async def my_agent(ctx: JobContext):
         # semantic understanding with acoustic cues (intonation, pitch, rhythm) for state-of-the-art accuracy.
         # AgentSession supplies the required VAD automatically.
         # See more at https://docs.livekit.io/agents/build/turns
+        # Endpointing tuned for telephony: 8 kHz SIP audio + multilingual STT deliver
+        # their final transcripts later than the turn detector's short default
+        # (~0.3s), which dropped the caller's turns ("eou ran after audio eot was
+        # flushed") and left the agent silent. Give finals time to land.
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
+            endpointing={"min_delay": 0.8, "max_delay": 4.0},
         ),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
@@ -419,6 +514,8 @@ async def my_agent(ctx: JobContext):
 
     # On an incident call, the agent speaks first to brief the lead once they pick up.
     if incident is not None:
+        # The human is on the phone (SIP), so listen to that leg, not any browser.
+        focus_audio_on_phone(session, incident.lead_phone_number)
         await session.generate_reply(
             instructions="Greet the lead and brief them on the incident now."
         )
