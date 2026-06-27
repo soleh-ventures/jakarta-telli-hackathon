@@ -10,7 +10,7 @@ import {
 } from './mock-data';
 import { ThinkingPanel } from './thinking-panel';
 import { Card, SectionLabel, SystemIcon, T } from './ui';
-import { VoiceSection } from './voice-section';
+import { VoiceDock } from './voice-dock';
 import type { HandFreeConfig } from './types';
 
 export function IncidentView({ config }: { config: HandFreeConfig }) {
@@ -27,7 +27,7 @@ export function IncidentView({ config }: { config: HandFreeConfig }) {
   return (
     <div className="flex h-full">
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-6 py-8">
+        <div className="mx-auto max-w-5xl px-6 pt-8 pb-40">
           {/* Banner */}
           <div className="relative overflow-hidden rounded-2xl border border-[#4a1d1d] bg-gradient-to-r from-[#1f1011] to-[#141518] p-6">
             <div
@@ -97,24 +97,23 @@ export function IncidentView({ config }: { config: HandFreeConfig }) {
               </div>
             </div>
 
-            {/* Recommendations + voice */}
-            <div className="space-y-7">
-              <div>
-                <SectionLabel>Recommendations</SectionLabel>
-                <div className="space-y-3">
-                  {RECOMMENDATIONS.map((r) => (
-                    <RecommendationCard key={r.label} rec={r} />
-                  ))}
-                </div>
+            {/* Recommendations */}
+            <div>
+              <SectionLabel>Recommendations</SectionLabel>
+              <div className="space-y-3">
+                {RECOMMENDATIONS.map((r) => (
+                  <RecommendationCard key={r.label} rec={r} />
+                ))}
               </div>
-
-              <VoiceSection config={config} />
             </div>
           </div>
         </div>
       </div>
 
       <ThinkingPanel />
+
+      {/* Voice lives in a bottom dock so the investigation stays the focus. */}
+      <VoiceDock config={config} />
     </div>
   );
 }
