@@ -1,6 +1,9 @@
+import asyncio
 import logging
 import os
+import re
 import textwrap
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -26,20 +29,68 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# The lead's number is collected in the frontend (localParticipant.setAttributes
-# {"lead_phone": "+1..."}); ONCALL_LEAD_PHONE env is the fallback for console / SIP-trigger.
-LEAD_PHONE_ATTR = "lead_phone"
+# Onboarding arrives from the frontend as participant attributes (see SessionConfigSync
+# in handfree-app.tsx). ONCALL_LEAD_PHONE env is the console / SIP-trigger fallback.
+PRIMARY_PHONE_ATTR = "primary_phone"
+BACKUP_PHONE_ATTR = "backup_phone"
+PRIMARY_NAME_ATTR = "primary_name"
+GITHUB_REPO_ATTR = "github_repo"
 ONCALL_LEAD_ENV = "ONCALL_LEAD_PHONE"
 
 
-def lead_number_from_room(room, environ: dict | None = None) -> str | None:
-    """The on-call lead's number: frontend participant attribute first, env fallback."""
+@dataclass(frozen=True)
+class Onboarding:
+    primary_name: str | None = None
+    primary_phone: str | None = None  # normalized E.164
+    github_repo: str | None = None
+
+
+def to_e164(raw: str | None) -> str | None:
+    """Normalize a display phone ("+1 555 010 1234") to E.164 ("+15550101234")."""
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    return "+" + digits if 7 <= len(digits) <= 15 else None
+
+
+def _room_attributes(room) -> dict:
     for participant in room.remote_participants.values():
-        number = (participant.attributes or {}).get(LEAD_PHONE_ATTR)
-        if number:
-            return number
+        if participant.attributes:
+            return dict(participant.attributes)
+    return {}
+
+
+def read_onboarding(room) -> Onboarding:
+    """The onboarding config the frontend pushed as participant attributes."""
+    attrs = _room_attributes(room)
+    return Onboarding(
+        primary_name=attrs.get(PRIMARY_NAME_ATTR) or None,
+        primary_phone=to_e164(attrs.get(PRIMARY_PHONE_ATTR))
+        or to_e164(attrs.get(BACKUP_PHONE_ATTR)),
+        github_repo=attrs.get(GITHUB_REPO_ATTR) or None,
+    )
+
+
+def lead_number_from_room(room, environ: dict | None = None) -> str | None:
+    """The on-call lead's number: onboarded primary/backup first, env fallback."""
+    cfg = read_onboarding(room)
+    if cfg.primary_phone:
+        return cfg.primary_phone
     env = environ if environ is not None else os.environ
-    return env.get(ONCALL_LEAD_ENV)
+    return to_e164(env.get(ONCALL_LEAD_ENV))
+
+
+async def await_onboarding(
+    room, *, timeout: float = 3.0, interval: float = 0.2
+) -> Onboarding:
+    """Give the frontend a moment to push its attributes after the human connects."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while True:
+        cfg = read_onboarding(room)
+        if cfg.primary_phone or cfg.github_repo or loop.time() >= deadline:
+            return cfg
+        await asyncio.sleep(interval)
 
 
 async def dial_lead(
@@ -119,9 +170,41 @@ _BASE_INSTRUCTIONS = textwrap.dedent(
 )
 
 
+_INCIDENT_INSTRUCTIONS = textwrap.dedent(
+    """\
+
+    # Incident response (HandFree)
+
+    During a production incident the engineer drives you by voice. Investigate and act through your tools:
+    - Check what is failing, find the suspect deploy and who shipped it, then on request roll it back, post to Slack, or call the on-call lead.
+    - Before any action that changes systems or places a phone call (rollback, Slack post, calling the lead), say what you will do in one sentence and wait for the engineer to say yes. Never act without that confirmation.
+    """
+)
+
+
+def _onboarding_context(cfg: Onboarding) -> str:
+    """Runtime facts from onboarding, appended so tools target the right repo/person."""
+    parts = []
+    if cfg.github_repo:
+        parts.append(
+            f"When looking up commits or pull requests, use the GitHub repository {cfg.github_repo}."
+        )
+    if cfg.primary_name:
+        parts.append(f"The on-call lead is {cfg.primary_name}.")
+    return "\n\n# This deployment\n" + " ".join(parts) if parts else ""
+
+
 class Assistant(Agent):
-    def __init__(self, incident: IncidentCall | None = None) -> None:
+    def __init__(
+        self,
+        incident: IncidentCall | None = None,
+        onboarding: Onboarding | None = None,
+    ) -> None:
         instructions = _BASE_INSTRUCTIONS
+        if onboarding is not None or incident is not None:
+            instructions += _INCIDENT_INSTRUCTIONS
+        if onboarding is not None:
+            instructions += _onboarding_context(onboarding)
         if incident is not None:
             instructions += _incident_briefing(incident)
         super().__init__(
@@ -191,28 +274,25 @@ async def my_agent(ctx: JobContext):
         mcp_servers=build_mcp_servers(),
     )
 
+    # Join the room first so the onboarding config the frontend pushes as participant
+    # attributes is available before we build the agent (repo to query, lead to call).
+    await ctx.connect()
+
+    onboarding = None
+    if incident is None:
+        onboarding = await await_onboarding(ctx.room)
+        logger.info(
+            f"onboarding: repo={onboarding.github_repo!r} lead={onboarding.primary_name!r}"
+        )
+
     # Start the session, which initializes the voice pipeline and warms up the models.
     # Note: no on-device noise cancellation here. For phone (SIP) calls, Krisp runs on
     # the SIP leg (see outbound_call/sip.py, krisp_enabled), so a second on-device model
     # would only duplicate work and starve the real-time audio loop on a busy machine.
     await session.start(
-        agent=Assistant(incident=incident),
+        agent=Assistant(incident=incident, onboarding=onboarding),
         room=ctx.room,
     )
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = anam.AvatarSession(
-    #     persona_config=anam.PersonaConfig(
-    #         name="...",
-    #         avatarId="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/anam
-    #     ),
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
-    # Join the room and connect to the user
-    await ctx.connect()
 
     # On an incident call, the agent speaks first to brief the lead once they pick up.
     if incident is not None:
