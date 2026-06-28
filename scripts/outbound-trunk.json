@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "HandFree outbound trunk",
+    "address": "handfree.pstn.twilio.com",
+    "numbers": ["+19802233365"]
+  }
+}
